@@ -10,7 +10,6 @@ import asyncio
 import base64
 import hashlib
 
-import requests
 from integrations.integration_item import IntegrationItem
 
 from redis_client import add_key_value_redis, get_value_redis, delete_key_redis
@@ -85,6 +84,13 @@ async def oauth2callback_airtable(request: Request):
             delete_key_redis(f'airtable_verifier:{org_id}:{user_id}'),
         )
 
+    # Check if token exchange was successful
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"AirTable token exchange failed: {response.text}"
+        )
+
     await add_key_value_redis(f'airtable_credentials:{org_id}:{user_id}', json.dumps(response.json()), expire=600)
     
     close_window_script = """
@@ -120,25 +126,30 @@ def create_integration_item_metadata_object(
     return integration_item_metadata
 
 
-def fetch_items(
+async def fetch_items(
     access_token: str, url: str, aggregated_response: list, offset=None
-) -> dict:
+) -> None:
     """Fetching the list of bases"""
     params = {'offset': offset} if offset is not None else {}
     headers = {'Authorization': f'Bearer {access_token}'}
-    response = requests.get(url, headers=headers, params=params)
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, headers=headers, params=params)
 
-    if response.status_code == 200:
-        results = response.json().get('bases', {})
-        offset = response.json().get('offset', None)
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=f"AirTable API request failed: {response.text}"
+        )
+        
+    results = response.json().get('bases', {})
+    offset = response.json().get('offset', None)
 
-        for item in results:
-            aggregated_response.append(item)
+    for item in results:
+        aggregated_response.append(item)
 
-        if offset is not None:
-            fetch_items(access_token, url, aggregated_response, offset)
-        else:
-            return
+    if offset is not None:
+        await fetch_items(access_token, url, aggregated_response, offset)
 
 
 async def get_items_airtable(credentials) -> list[IntegrationItem]:
@@ -147,26 +158,35 @@ async def get_items_airtable(credentials) -> list[IntegrationItem]:
     list_of_integration_item_metadata = []
     list_of_responses = []
 
-    fetch_items(credentials.get('access_token'), url, list_of_responses)
+    await fetch_items(credentials.get('access_token'), url, list_of_responses)
+    
     for response in list_of_responses:
         list_of_integration_item_metadata.append(
             create_integration_item_metadata_object(response, 'Base')
         )
-        tables_response = requests.get(
-            f'https://api.airtable.com/v0/meta/bases/{response.get("id")}/tables',
-            headers={'Authorization': f'Bearer {credentials.get("access_token")}'},
-        )
-        if tables_response.status_code == 200:
-            tables_response = tables_response.json()
-            for table in tables_response['tables']:
-                list_of_integration_item_metadata.append(
-                    create_integration_item_metadata_object(
-                        table,
-                        'Table',
-                        response.get('id', None),
-                        response.get('name', None),
-                    )
+        
+        # Fetch tables for each base
+        async with httpx.AsyncClient() as client:
+            tables_response = await client.get(
+                f'https://api.airtable.com/v0/meta/bases/{response.get("id")}/tables',
+                headers={'Authorization': f'Bearer {credentials.get("access_token")}'},
+            )
+            
+        if tables_response.status_code != 200:
+            # Log the error but continue processing other bases
+            print(f"Failed to fetch tables for base {response.get('id')}: {tables_response.text}")
+            continue
+            
+        tables_response_json = tables_response.json()
+        for table in tables_response_json['tables']:
+            list_of_integration_item_metadata.append(
+                create_integration_item_metadata_object(
+                    table,
+                    'Table',
+                    response.get('id', None),
+                    response.get('name', None),
                 )
+            )
 
     print(f'list_of_integration_item_metadata: {list_of_integration_item_metadata}')
     return list_of_integration_item_metadata

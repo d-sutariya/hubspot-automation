@@ -7,7 +7,6 @@ from fastapi.responses import HTMLResponse
 import httpx
 import asyncio
 import base64
-import requests
 from integrations.integration_item import IntegrationItem
 
 from redis_client import add_key_value_redis, get_value_redis, delete_key_redis
@@ -61,6 +60,13 @@ async def oauth2callback_notion(request: Request):
                 }
             ),
             delete_key_redis(f'notion_state:{org_id}:{user_id}'),
+        )
+
+    # Check if token exchange was successful
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Notion token exchange failed: {response.text}"
         )
 
     await add_key_value_redis(f'notion_credentials:{org_id}:{user_id}', json.dumps(response.json()), expire=600)
@@ -138,21 +144,27 @@ def create_integration_item_metadata_object(
 async def get_items_notion(credentials) -> list[IntegrationItem]:
     """Aggregates all metadata relevant for a notion integration"""
     credentials = json.loads(credentials)
-    response = requests.post(
-        'https://api.notion.com/v1/search',
-        headers={
-            'Authorization': f'Bearer {credentials.get("access_token")}',
-            'Notion-Version': '2022-06-28',
-        },
-    )
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            'https://api.notion.com/v1/search',
+            headers={
+                'Authorization': f'Bearer {credentials.get("access_token")}',
+                'Notion-Version': '2022-06-28',
+            },
+        )
 
-    if response.status_code == 200:
-        results = response.json()['results']
-        list_of_integration_item_metadata = []
-        for result in results:
-            list_of_integration_item_metadata.append(
-                create_integration_item_metadata_object(result)
-            )
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=f"Notion API request failed: {response.text}"
+        )
 
-        print(list_of_integration_item_metadata)
-    return 
+    results = response.json()['results']
+    list_of_integration_item_metadata = []
+    for result in results:
+        list_of_integration_item_metadata.append(
+            create_integration_item_metadata_object(result)
+        )
+
+    return list_of_integration_item_metadata
