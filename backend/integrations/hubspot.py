@@ -1,4 +1,5 @@
 # hubspot.py
+from typing import Dict, List, Any, Optional
 import os
 from fastapi import Request
 from dotenv import load_dotenv
@@ -9,7 +10,6 @@ import secrets
 from fastapi.responses import HTMLResponse
 import httpx
 import asyncio
-import hashlib
 from fastapi import HTTPException
 from redis_client import add_key_value_redis, get_value_redis, delete_key_redis
 from integrations.integration_item import IntegrationItem
@@ -27,7 +27,7 @@ REDIRECT_URI = os.getenv('REDIRECT_URI')
 
 # HubSpot scopes - adjust based on your app's requirements
 SCOPES = os.getenv('HUBSPOT_SCOPE', 'crm.objects.contacts.read crm.objects.contacts.write crm.objects.companies.read crm.objects.companies.write crm.objects.deals.read crm.objects.deals.write')
-async def authorize_hubspot(user_id, org_id):
+async def authorize_hubspot(user_id: str, org_id: str) -> str:
     logger.info(f"Starting HubSpot authorization for user_id: {user_id}, org_id: {org_id}")
     
     # Create state data for OAuth security
@@ -51,7 +51,7 @@ async def authorize_hubspot(user_id, org_id):
 
     return authorization_url
 
-async def oauth2callback_hubspot(request: Request):
+async def oauth2callback_hubspot(request: Request) -> HTMLResponse:
     logger.info("HubSpot OAuth callback initiated")
     
     # Extract code and state from query parameters
@@ -123,7 +123,6 @@ async def oauth2callback_hubspot(request: Request):
         logger.info(f"Successfully obtained access token")
         
         # Store the tokens securely in Redis with expiration and metadata
-        
         current_timestamp = int(time.time())
         expires_at = current_timestamp + token_response.get('expires_in', 1800)
         
@@ -167,7 +166,7 @@ async def oauth2callback_hubspot(request: Request):
         logger.error(f"OAuth callback failed with exception: {str(e)}")
         raise HTTPException(status_code=500, detail=f"OAuth callback failed: {str(e)}")
 
-async def get_hubspot_credentials(user_id, org_id):
+async def get_hubspot_credentials(user_id: str, org_id: str) -> Dict[str, Any]:
     """Retrieve HubSpot credentials from Redis storage with automatic token refresh"""
     logger.info(f"Retrieving HubSpot credentials")
     
@@ -221,7 +220,7 @@ async def get_hubspot_credentials(user_id, org_id):
     logger.info(f"Using valid existing token")
     return credentials_data
 
-async def refresh_hubspot_token(refresh_token, user_id, org_id):
+async def refresh_hubspot_token(refresh_token: str, user_id: str, org_id: str) -> Dict[str, Any]:
     """Refresh HubSpot access token using refresh token"""
     logger.info(f"Starting token refresh")
     
@@ -275,7 +274,7 @@ async def refresh_hubspot_token(refresh_token, user_id, org_id):
     logger.info(f"Updated refreshed credentials in Redis")
     return refreshed_credentials
 
-async def create_integration_item_metadata_object(response_json, object_type="company"):
+async def create_integration_item_metadata_object(response_json: Dict[str, Any], object_type: str = "company") -> IntegrationItem:
     """Create an IntegrationItem from HubSpot object response"""
     properties = response_json.get('properties', {})
     
@@ -303,7 +302,7 @@ async def create_integration_item_metadata_object(response_json, object_type="co
     
     return integration_item
 
-async def get_items_hubspot(credentials_data):
+async def get_items_hubspot(credentials_data: Dict[str, Any]) -> List[IntegrationItem]:
     """Fetch HubSpot objects (companies, contacts, deals) and return as IntegrationItems"""
     logger.info("Starting HubSpot data fetch process")
     
@@ -364,7 +363,13 @@ async def get_items_hubspot(credentials_data):
         logger.error(f"Failed to fetch HubSpot data: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch HubSpot data: {str(e)}")
 
-async def fetch_hubspot_objects(object_type, headers, integration_items_list, properties=None, limit=100):
+async def fetch_hubspot_objects(
+    object_type: str, 
+    headers: Dict[str, str], 
+    integration_items_list: List[IntegrationItem], 
+    properties: Optional[List[str]] = None, 
+    limit: int = 100
+) -> None:
     """Fetch objects from HubSpot using the search API with pagination"""
     logger.info(f"Starting fetch for HubSpot {object_type}")
     
