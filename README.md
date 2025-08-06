@@ -10,23 +10,12 @@ A comprehensive integration platform supporting HubSpot, Notion, and AirTable OA
 
 **Solution**: Implemented a comprehensive OAuth 2.0 + PKCE flow with the following key design decisions:
 
-#### 1. **Security-First OAuth Implementation**
-```python
-# State parameter with embedded user context for security
-state_data = {
-    'state': secrets.token_urlsafe(32),  # Cryptographically secure
-    'user_id': user_id,
-    'org_id': org_id
-}
-encoded_state = base64.urlsafe_b64encode(json.dumps(state_data).encode('utf-8')).decode('utf-8')
-```
-
-#### 2. **Automatic Token Refresh Architecture**
+#### 1. **Automatic Token Refresh Architecture**
 - **5-minute buffer refresh**: Proactively refresh tokens before expiration
 - **Graceful degradation**: Handle refresh failures with re-authorization flow
 - **Persistent storage**: 30-day credential storage vs 10-minute temporary state
 
-#### 3. **Concurrent API Data Fetching**
+#### 2. **Concurrent API Data Fetching**
 ```python
 await asyncio.gather(
     fetch_hubspot_objects('companies', headers, items_list),
@@ -36,15 +25,13 @@ await asyncio.gather(
 ```
 **Performance Impact**: 3x faster than sequential API calls
 
-#### 4. **Pagination & Rate Limit Handling**
+#### 3. **Pagination & Rate Limit Handling**
 - **Smart pagination**: Handle HubSpot's cursor-based pagination with `after` tokens
 - **Configurable limits**: 50 pages max (5,000 records per object type) with safety bounds
 - **Error resilience**: Continue processing if one object type fails
 
 ## � Key Technical Features
 
-### **OAuth 2.0 + PKCE Security Implementation**
-- **PKCE code challenge/verifier**: Enhanced security for public clients
 - **State parameter validation**: Prevents CSRF attacks with Redis-backed verification
 - **Secure token storage**: JWT-like credential management with expiration tracking
 
@@ -61,38 +48,11 @@ if current_timestamp >= (expires_at - buffer_time):
 - **HTTP status validation**: Proper error responses with detailed messages
 - **Graceful failures**: Partial success handling for multi-object fetching
 
-### **Data Standardization**
-```python
-# Unified data model across all integrations
-integration_item = IntegrationItem(
-    id=response_json.get('id'),
-    type=object_type,
-    name=extracted_name,
-    creation_time=response_json.get('createdAt'),
-    last_modified_time=response_json.get('updatedAt'),
-    parent_id=None
-)
-```
 
 ## � Implementation Highlights & Problem-Solving
 
-### **Challenge 1: OAuth Security & State Management**
-**Problem**: Secure OAuth flow with proper state validation and user context preservation.
 
-**Solution**: Multi-layered security approach:
-```python
-# 1. Generate cryptographically secure state with user context
-state_data = {'state': secrets.token_urlsafe(32), 'user_id': user_id, 'org_id': org_id}
-
-# 2. Store in Redis with short expiration (10 minutes)
-await add_key_value_redis(f'hubspot_state:{org_id}:{user_id}', encoded_state, expire=600)
-
-# 3. Validate on callback with exact state matching
-if stored_encoded_state.decode() != state_param:
-    raise HTTPException(status_code=400, detail="State verification failed")
-```
-
-### **Challenge 2: Token Lifecycle Management**
+### **Challenge 1: Token Lifecycle Management**
 **Problem**: Access tokens expire every 30 minutes, causing integration failures.
 
 **Solution**: Proactive refresh strategy:
@@ -104,7 +64,7 @@ if current_timestamp >= (expires_at - buffer_time):
     refreshed_credentials = await refresh_hubspot_token(...)
 ```
 
-### **Challenge 3: API Performance Optimization**
+### **Challenge 2: API Performance Optimization**
 **Problem**: Sequential API calls for companies, contacts, and deals took 6+ seconds.
 
 **Solution**: Concurrent execution with shared data structure:
@@ -117,7 +77,7 @@ await asyncio.gather(
 )
 ```
 
-### **Challenge 4: Pagination & Large Dataset Handling**
+### **Challenge 3: Pagination & Large Dataset Handling**
 **Problem**: HubSpot returns data in pages (100 records each), need to handle large datasets.
 
 **Solution**: Cursor-based pagination with safety limits:
@@ -128,18 +88,6 @@ while page_count < max_pages:  # Safety limit: 50 pages = 5,000 records
     after = response.json().get('paging', {}).get('next', {}).get('after')
 ```
 
-### **Challenge 5: Error Resilience & Debugging**
-**Problem**: OAuth flows are complex and failures are hard to debug.
-
-**Solution**: Comprehensive logging and graceful error handling:
-```python
-logger.info(f"Token check: current={current_timestamp}, expires_at={expires_at}")
-logger.info(f"Starting concurrent fetch of HubSpot companies, contacts, and deals")
-
-# Detailed error context
-if response.status_code != 200:
-    logger.error(f"Failed to fetch {object_type}: {response.status_code} - {response.text}")
-```
 
 ## 🚀 How to Run the Code
 
