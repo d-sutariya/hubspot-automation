@@ -76,8 +76,6 @@ async def oauth2callback_hubspot(request: Request):
         user_id = state_data.get('user_id')
         org_id = state_data.get('org_id')
         
-        logger.info(f"Decoded state for user_id: {user_id}, org_id: {org_id}")
-        
         if not user_id or not org_id:
             logger.error("Invalid state data - missing user_id or org_id")
             raise HTTPException(status_code=400, detail="Invalid state data")
@@ -93,8 +91,6 @@ async def oauth2callback_hubspot(request: Request):
             logger.error(f"State verification failed - state mismatch for user {user_id}")
             raise HTTPException(status_code=400, detail="State verification failed - invalid state")
         
-        logger.info(f"State verification successful for user {user_id}")
-        
         # Prepare token exchange request
         token_data = {
             'grant_type': 'authorization_code',
@@ -104,7 +100,7 @@ async def oauth2callback_hubspot(request: Request):
             'client_secret': CLIENT_SECRET
         }
         
-        logger.info(f"Initiating token exchange with HubSpot for user {user_id}")
+        logger.info(f"Initiating token exchange with HubSpot")
         
         # Exchange authorization code for access token
         async with httpx.AsyncClient() as client:
@@ -113,9 +109,9 @@ async def oauth2callback_hubspot(request: Request):
                 headers={'content-type': 'application/x-www-form-urlencoded'},
                 data=token_data
             )
-        
-        logger.info(f"Token exchange response status: {response.status_code} for user {user_id}")
-        
+
+        logger.info(f"Token exchange response status: {response.status_code}")
+
         if response.status_code != 200:
             logger.error(f"Token exchange failed for user {user_id}: {response.text}")
             raise HTTPException(
@@ -124,7 +120,7 @@ async def oauth2callback_hubspot(request: Request):
             )
         
         token_response = response.json()
-        logger.info(f"Successfully obtained access token for user {user_id}")
+        logger.info(f"Successfully obtained access token")
         
         # Store the tokens securely in Redis with expiration and metadata
         
@@ -147,13 +143,13 @@ async def oauth2callback_hubspot(request: Request):
             json.dumps(credentials), 
             expire=2592000  # 30 days
         )
-        
-        logger.info(f"Stored credentials in Redis for user {user_id} with 30-day expiry")
-        
+
+        logger.info(f"Stored credentials in Redis with 30-day expiry")
+
         # Clean up temporary state data
         await delete_key_redis(f'hubspot_state:{org_id}:{user_id}')
-        logger.info(f"Cleaned up temporary OAuth state for user {user_id}")
-        
+        logger.info(f"Cleaned up temporary OAuth state")
+
         close_window_script = """
         <html>
             <script>
@@ -161,7 +157,7 @@ async def oauth2callback_hubspot(request: Request):
             </script>
         </html>
         """
-        logger.info(f"HubSpot OAuth flow completed successfully for user {user_id}")
+        logger.info(f"HubSpot OAuth flow completed successfully")
         return HTMLResponse(content=close_window_script)
         
     except json.JSONDecodeError:
@@ -173,41 +169,41 @@ async def oauth2callback_hubspot(request: Request):
 
 async def get_hubspot_credentials(user_id, org_id):
     """Retrieve HubSpot credentials from Redis storage with automatic token refresh"""
-    logger.info(f"Retrieving HubSpot credentials for user_id: {user_id}, org_id: {org_id}")
+    logger.info(f"Retrieving HubSpot credentials")
     
     credentials = await get_value_redis(f'hubspot_credentials:{org_id}:{user_id}')
     
     if not credentials:
-        logger.error(f"No HubSpot credentials found for user {user_id}")
+        logger.error(f"No HubSpot credentials found")
         raise HTTPException(status_code=400, detail='No HubSpot credentials found. Please re-authorize the integration.')
     
     try:
         credentials_data = json.loads(credentials.decode() if isinstance(credentials, bytes) else credentials)
-        logger.info(f"Successfully parsed credentials for user {user_id}")
+        logger.info(f"Successfully parsed credentials")
     except json.JSONDecodeError:
-        logger.error(f"Invalid credentials format for user {user_id}")
+        logger.error(f"Invalid credentials format")
         raise HTTPException(status_code=400, detail='Invalid credentials format. Please re-authorize the integration.')
     
     if not credentials_data:
-        logger.error(f"Empty credentials found for user {user_id}")
+        logger.error(f"Empty credentials found")
         raise HTTPException(status_code=400, detail='Empty credentials found. Please re-authorize the integration.')
     
     # Check if token is expired or about to expire (refresh 5 minutes before expiry)
     current_timestamp = int(time.time())
     expires_at = credentials_data.get('expires_at', 0)
     buffer_time = 300  # 5 minutes buffer
-    
-    logger.info(f"Token check for user {user_id}: current={current_timestamp}, expires_at={expires_at}, needs_refresh={current_timestamp >= (expires_at - buffer_time)}")
-    
+
+    logger.info(f"Token check: current={current_timestamp}, expires_at={expires_at}, needs_refresh={current_timestamp >= (expires_at - buffer_time)}")
+
     if current_timestamp >= (expires_at - buffer_time):
         # Token is expired or about to expire, refresh it
-        logger.info(f"Token expired/expiring for user {user_id}, attempting refresh")
+        logger.info(f"Token expired/expiring, attempting refresh")
         try:
             refreshed_credentials = await refresh_hubspot_token(credentials_data['refresh_token'], user_id, org_id)
-            logger.info(f"Successfully refreshed token for user {user_id}")
+            logger.info(f"Successfully refreshed token")
             return refreshed_credentials
         except Exception as e:
-            logger.error(f"Token refresh failed for user {user_id}: {str(e)}")
+            logger.error(f"Token refresh failed: {str(e)}")
             # If refresh fails, mark as expired and ask for re-authorization
             credentials_data['status'] = 'expired'
             await add_key_value_redis(
@@ -222,12 +218,12 @@ async def get_hubspot_credentials(user_id, org_id):
     
     # Token is still valid
     credentials_data['status'] = 'active'
-    logger.info(f"Using valid existing token for user {user_id}")
+    logger.info(f"Using valid existing token")
     return credentials_data
 
 async def refresh_hubspot_token(refresh_token, user_id, org_id):
     """Refresh HubSpot access token using refresh token"""
-    logger.info(f"Starting token refresh for user {user_id}")
+    logger.info(f"Starting token refresh")
     
     token_data = {
         'grant_type': 'refresh_token',
@@ -242,18 +238,18 @@ async def refresh_hubspot_token(refresh_token, user_id, org_id):
             headers={'content-type': 'application/x-www-form-urlencoded'},
             data=token_data
         )
-    
-    logger.info(f"Token refresh response status: {response.status_code} for user {user_id}")
-    
+
+    logger.info(f"Token refresh response status: {response.status_code}")
+
     if response.status_code != 200:
-        logger.error(f"Token refresh failed for user {user_id}: {response.text}")
+        logger.error(f"Token refresh failed: {response.text}")
         raise HTTPException(
             status_code=400, 
             detail=f"Token refresh failed: {response.text}"
         )
     
     token_response = response.json()
-    logger.info(f"Successfully refreshed token for user {user_id}")
+    logger.info(f"Successfully refreshed token")
     
     # Store refreshed credentials
     current_timestamp = int(time.time())
@@ -276,7 +272,7 @@ async def refresh_hubspot_token(refresh_token, user_id, org_id):
         expire=2592000  # 30 days
     )
     
-    logger.info(f"Updated refreshed credentials in Redis for user {user_id}")
+    logger.info(f"Updated refreshed credentials in Redis")
     return refreshed_credentials
 
 async def create_integration_item_metadata_object(response_json, object_type="company"):

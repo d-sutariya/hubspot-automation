@@ -9,19 +9,29 @@ import axios from 'axios';
 const endpointMapping = {
     'Notion': 'notion',
     'Airtable': 'airtable',
+    'HubSpot': 'hubspot',
 };
 
-export const DataForm = ({ integrationType, credentials }) => {
+export const DataForm = ({ integrationType, credentials, user, org }) => {
     const [loadedData, setLoadedData] = useState(null);
     const endpoint = endpointMapping[integrationType];
 
     const handleLoad = async () => {
         try {
             const formData = new FormData();
-            formData.append('credentials', JSON.stringify(credentials));
+            
+            // HubSpot uses the new API pattern with user_id and org_id
+            if (integrationType === 'HubSpot') {
+                formData.append('user_id', user);
+                formData.append('org_id', org);
+            } else {
+                // Notion and Airtable use the old credentials string pattern
+                formData.append('credentials', JSON.stringify(credentials));
+            }
+            
             const response = await axios.post(`http://localhost:8000/integrations/${endpoint}/load`, formData);
             const data = response.data;
-            setLoadedData(data);
+            setLoadedData(JSON.stringify(data, null, 2)); // Pretty print the JSON
         } catch (e) {
             alert(e?.response?.data?.detail);
         }
@@ -36,6 +46,9 @@ export const DataForm = ({ integrationType, credentials }) => {
                     sx={{mt: 2}}
                     InputLabelProps={{ shrink: true }}
                     disabled
+                    multiline
+                    rows={10}
+                    fullWidth
                 />
                 <Button
                     onClick={handleLoad}
