@@ -13,6 +13,8 @@ import hashlib
 from fastapi import HTTPException
 from redis_client import add_key_value_redis, get_value_redis, delete_key_redis
 from integrations.integration_item import IntegrationItem
+import time
+
 load_dotenv(Path(__file__).parents[1]/'.env')
 
 CLIENT_ID = os.getenv('CLIENT_ID')
@@ -96,19 +98,26 @@ async def oauth2callback_hubspot(request: Request):
         
         token_response = response.json()
         
-        # Store the tokens securely in Redis with expiration
+        # Store the tokens securely in Redis with expiration and metadata
+        
+        current_timestamp = int(time.time())
+        expires_at = current_timestamp + token_response.get('expires_in', 1800)
+        
         credentials = {
             'access_token': token_response['access_token'],
             'refresh_token': token_response['refresh_token'],
             'token_type': token_response.get('token_type', 'bearer'),
-            'expires_in': token_response.get('expires_in', 1800)
+            'expires_in': token_response.get('expires_in', 1800),
+            'expires_at': expires_at,
+            'created_at': current_timestamp,
+            'status': 'active'
         }
         
-        # Store credentials in Redis (expires in 10 minutes)
+        # Store credentials in Redis with longer expiration (30 days for persistent access)
         await add_key_value_redis(
             f'hubspot_credentials:{org_id}:{user_id}', 
             json.dumps(credentials), 
-            expire=600  # 10 minutes
+            expire=2592000  # 30 days
         )
         
         # Clean up temporary state data
@@ -128,8 +137,93 @@ async def oauth2callback_hubspot(request: Request):
         raise HTTPException(status_code=500, detail=f"OAuth callback failed: {str(e)}")
 
 async def get_hubspot_credentials(user_id, org_id):
-    # TODO
-    pass
+    """Retrieve HubSpot credentials from Redis storage with automatic token refresh"""
+    credentials = await get_value_redis(f'hubspot_credentials:{org_id}:{user_id}')
+    
+    if not credentials:
+        raise HTTPException(status_code=400, detail='No HubSpot credentials found. Please re-authorize the integration.')
+    
+    try:
+        credentials_data = json.loads(credentials.decode() if isinstance(credentials, bytes) else credentials)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail='Invalid credentials format. Please re-authorize the integration.')
+    
+    if not credentials_data:
+        raise HTTPException(status_code=400, detail='Empty credentials found. Please re-authorize the integration.')
+    
+    # Check if token is expired or about to expire (refresh 5 minutes before expiry)
+    current_timestamp = int(time.time())
+    expires_at = credentials_data.get('expires_at', 0)
+    buffer_time = 300  # 5 minutes buffer
+    
+    if current_timestamp >= (expires_at - buffer_time):
+        # Token is expired or about to expire, refresh it
+        try:
+            refreshed_credentials = await refresh_hubspot_token(credentials_data['refresh_token'], user_id, org_id)
+            return refreshed_credentials
+        except Exception as e:
+            # If refresh fails, mark as expired and ask for re-authorization
+            credentials_data['status'] = 'expired'
+            await add_key_value_redis(
+                f'hubspot_credentials:{org_id}:{user_id}', 
+                json.dumps(credentials_data), 
+                expire=2592000
+            )
+            raise HTTPException(
+                status_code=401, 
+                detail='HubSpot token expired and refresh failed. Please re-authorize the integration.'
+            )
+    
+    # Token is still valid
+    credentials_data['status'] = 'active'
+    return credentials_data
+
+async def refresh_hubspot_token(refresh_token, user_id, org_id):
+    """Refresh HubSpot access token using refresh token"""
+    token_data = {
+        'grant_type': 'refresh_token',
+        'refresh_token': refresh_token,
+        'client_id': CLIENT_ID,
+        'client_secret': CLIENT_SECRET
+    }
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            'https://api.hubapi.com/oauth/v1/token',
+            headers={'content-type': 'application/x-www-form-urlencoded'},
+            data=token_data
+        )
+    
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Token refresh failed: {response.text}"
+        )
+    
+    token_response = response.json()
+    
+    # Store refreshed credentials
+    current_timestamp = int(time.time())
+    expires_at = current_timestamp + token_response.get('expires_in', 1800)
+    
+    refreshed_credentials = {
+        'access_token': token_response['access_token'],
+        'refresh_token': token_response.get('refresh_token', refresh_token),  # Some APIs don't return new refresh token
+        'token_type': token_response.get('token_type', 'bearer'),
+        'expires_in': token_response.get('expires_in', 1800),
+        'expires_at': expires_at,
+        'refreshed_at': current_timestamp,
+        'status': 'active'
+    }
+    
+    # Update stored credentials
+    await add_key_value_redis(
+        f'hubspot_credentials:{org_id}:{user_id}', 
+        json.dumps(refreshed_credentials), 
+        expire=2592000  # 30 days
+    )
+    
+    return refreshed_credentials
 
 async def create_integration_item_metadata_object(response_json):
     # TODO
