@@ -2,7 +2,11 @@
 
 A comprehensive integration platform supporting HubSpot, Notion, and AirTable OAuth connections with automatic token management and data fetching capabilities.
 
-## 🏗️ HubSpot Integration Implementation
+## HubSpot Integration Implementation
+
+### Demo Video Link:-
+
+https://drive.google.com/file/d/1QvC_eT0lTkrxwrW2kBwf2VPoUx6bi2AT/view?usp=drive_link
 
 ### Technical Architecture & Design Decisions
 
